@@ -43,7 +43,8 @@ import {
   CloudOff,
   Database,
   Copy,
-  ExternalLink
+  ExternalLink,
+  GraduationCap
 } from 'lucide-react';
 import {
   Task,
@@ -77,7 +78,8 @@ const INITIAL_PRESETS: Task[] = [
     createdAt: new Date().toISOString(),
     completedAt: null,
     timeSpentSeconds: 120,
-    isQuickEntry: false
+    isQuickEntry: false,
+    learningGoal: 'Dieper inzicht in mijn jaarlijkse financiën en het doorbreken van administratieve angst.'
   },
   {
     id: 'task-preset-2',
@@ -98,7 +100,8 @@ const INITIAL_PRESETS: Task[] = [
     createdAt: new Date(Date.now() - 86400000).toISOString(),
     completedAt: null,
     timeSpentSeconds: 340,
-    isQuickEntry: false
+    isQuickEntry: false,
+    learningGoal: 'Kwetsbaar en professioneel communiceren onder druk zonder pleasen.'
   },
   {
     id: 'task-preset-3',
@@ -119,7 +122,8 @@ const INITIAL_PRESETS: Task[] = [
     createdAt: new Date(Date.now() - 172800000).toISOString(),
     completedAt: new Date(Date.now() - 3600000).toISOString(),
     timeSpentSeconds: 600,
-    isQuickEntry: false
+    isQuickEntry: false,
+    learningGoal: 'Ervaren hoe een opgeruimde fysieke werkomgeving mijn mentale helderheid versterkt.'
   }
 ];
 
@@ -167,6 +171,7 @@ create table if not exists tasks (
   completed_at text,
   time_spent_seconds integer default 0,
   is_quick_entry boolean default false,
+  learning_goal text default '',
   updated_at text default (now() at time zone 'utc')::text
 );
 
@@ -331,7 +336,7 @@ export default function App() {
   const [filterMode, setFilterMode] = useState('all'); // 'all', 'frogs', 'quick', 'done'
   const [categoryFilter, setCategoryFilter] = useState('all');
 
-  // Intake Mode: 'quick' (10s fast track) or 'woop' (deep 3-question analysis)
+  // Intake Mode: 'quick' (10s fast track) or 'woop' (deep 3/4-question analysis)
   const [intakeMode, setIntakeMode] = useState<'quick' | 'woop'>('quick');
 
   // Quick Invoer Form State
@@ -341,7 +346,7 @@ export default function App() {
     category: 'Werk'
   });
 
-  // WOOP Form states for creating/editing tasks
+  // WOOP Form states for creating/editing tasks (including learningGoal)
   const [isEditing, setIsEditing] = useState(false);
   const [editTargetId, setEditTargetId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -350,10 +355,15 @@ export default function App() {
     obstacle: '',
     obstacleType: 'overwhelm',
     microStep: '',
+    learningGoal: '',
     dreadLevel: 3,
     impactLevel: 4,
     category: 'Werk'
   });
+
+  // Micro-step inline editing state
+  const [editingStepId, setEditingStepId] = useState<string | null>(null);
+  const [editingStepText, setEditingStepText] = useState<string>('');
 
   // Modal states
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -509,6 +519,11 @@ export default function App() {
       const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
 
       if (e.key === 'Escape') {
+        if (editingStepId) {
+          setEditingStepId(null);
+          setEditingStepText('');
+          return;
+        }
         if (isZenMode) {
           setIsZenMode(false);
           if (autoPlay) audioEngine.play('click');
@@ -533,7 +548,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isZenMode, isTimerRunning, activeTask, nextIncompleteMicroStep, autoPlay]);
+  }, [isZenMode, isTimerRunning, activeTask, nextIncompleteMicroStep, autoPlay, editingStepId]);
 
   // Fast-Track Quick Brain Dump Submit
   const handleQuickSubmit = (e: React.FormEvent) => {
@@ -561,7 +576,8 @@ export default function App() {
       createdAt: new Date().toISOString(),
       completedAt: null,
       timeSpentSeconds: 0,
-      isQuickEntry: true
+      isQuickEntry: true,
+      learningGoal: ''
     };
 
     setTasks(prev => [newTask, ...prev]);
@@ -586,7 +602,7 @@ export default function App() {
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title.trim() || !formData.outcome.trim() || !formData.microStep.trim()) {
-      showNotification('Vul a.u.b. de 3 kernvragen in voor optimale momentum-begeleiding.', 'warning');
+      showNotification('Vul a.u.b. de kernvragen in voor optimale momentum-begeleiding.', 'warning');
       return;
     }
 
@@ -615,7 +631,8 @@ export default function App() {
       createdAt: new Date().toISOString(),
       completedAt: null,
       timeSpentSeconds: 0,
-      isQuickEntry: false
+      isQuickEntry: false,
+      learningGoal: formData.learningGoal || ''
     };
 
     setTasks(prev => [newTask, ...prev]);
@@ -640,6 +657,7 @@ export default function App() {
             obstacle: formData.obstacle,
             obstacleType: formData.obstacleType,
             microStep: formData.microStep,
+            learningGoal: formData.learningGoal || '',
             dreadLevel: Number(formData.dreadLevel),
             impactLevel: Number(formData.impactLevel),
             category: formData.category,
@@ -669,6 +687,7 @@ export default function App() {
       obstacle: '',
       obstacleType: 'overwhelm',
       microStep: '',
+      learningGoal: '',
       dreadLevel: 3,
       impactLevel: 4,
       category: 'Werk'
@@ -687,6 +706,7 @@ export default function App() {
       obstacle: task.obstacle,
       obstacleType: task.obstacleType || 'overwhelm',
       microStep: task.microStep,
+      learningGoal: task.learningGoal || '',
       dreadLevel: task.dreadLevel,
       impactLevel: task.impactLevel,
       category: task.category
@@ -696,7 +716,7 @@ export default function App() {
 
   const handleEnrichQuickTask = (task: Task) => {
     handleEditClick(task);
-    showNotification('Vul de WOOP-vragen in om de taakpsychologie te verdiepen.', 'info');
+    showNotification('Vul de WOOP-vragen en je leerdoel in om de taakpsychologie te verdiepen.', 'info');
   };
 
   const handleDeleteTask = (taskId: string, e?: React.MouseEvent) => {
@@ -746,7 +766,7 @@ export default function App() {
     setTasks(prev =>
       prev.map(t => {
         if (t.id === taskId) {
-          const updatedSteps = t.microSteps.map(s => {
+          const updatedSteps = (t.microSteps || []).map(s => {
             if (s.id === stepId) {
               const nextState = !s.completed;
               if (nextState && autoPlay) audioEngine.play('complete');
@@ -801,6 +821,71 @@ export default function App() {
     setZenNewStepText('');
     if (autoPlay) audioEngine.play('click');
     showNotification('Micro-stap toegevoegd aan de taak.', 'info');
+  };
+
+  // Micro-step editing & deleting handlers
+  const startEditMicroStep = (stepId: string, currentText: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setEditingStepId(stepId);
+    setEditingStepText(currentText);
+  };
+
+  const saveEditMicroStep = (taskId: string, stepId: string, e?: React.FormEvent | React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (!editingStepText.trim()) return;
+
+    let updatedObj: Task | null = null;
+    setTasks(prev =>
+      prev.map(t => {
+        if (t.id === taskId) {
+          const updatedSteps = (t.microSteps || []).map(s =>
+            s.id === stepId ? { ...s, text: editingStepText.trim() } : s
+          );
+          const updated = { ...t, microSteps: updatedSteps };
+          updatedObj = updated;
+          return updated;
+        }
+        return t;
+      })
+    );
+
+    if (updatedObj && isCloudConnected) {
+      upsertRemoteTask(updatedObj);
+    }
+
+    setEditingStepId(null);
+    setEditingStepText('');
+    if (autoPlay) audioEngine.play('click');
+    showNotification('Micro-stap bijgewerkt.', 'info');
+  };
+
+  const cancelEditMicroStep = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setEditingStepId(null);
+    setEditingStepText('');
+  };
+
+  const deleteMicroStep = (taskId: string, stepId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    let updatedObj: Task | null = null;
+    setTasks(prev =>
+      prev.map(t => {
+        if (t.id === taskId) {
+          const updatedSteps = (t.microSteps || []).filter(s => s.id !== stepId);
+          const updated = { ...t, microSteps: updatedSteps };
+          updatedObj = updated;
+          return updated;
+        }
+        return t;
+      })
+    );
+
+    if (updatedObj && isCloudConnected) {
+      upsertRemoteTask(updatedObj);
+    }
+
+    if (autoPlay) audioEngine.play('click');
+    showNotification('Micro-stap verwijderd.', 'info');
   };
 
   const toggleTimer = (forceOpenZen = false) => {
@@ -930,7 +1015,7 @@ export default function App() {
   const handleExportJSON = () => {
     const backupData = {
       app: 'Editorial Momentum Task Canvas',
-      version: '1.2.0',
+      version: '1.3.0',
       exportedAt: new Date().toISOString(),
       tasks: tasks,
       settings: {
@@ -1073,6 +1158,12 @@ export default function App() {
               <p className="font-serif italic text-sm lg:text-base opacity-80 max-w-xl mx-auto text-emerald-700 dark:text-emerald-400">
                 🎯 "{activeTask.outcome}"
               </p>
+              {activeTask.learningGoal && (
+                <p className="font-serif text-xs italic text-blue-600 dark:text-blue-400 flex items-center justify-center gap-1">
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  <span>Leerdoel: "{activeTask.learningGoal}"</span>
+                </p>
+              )}
             </div>
 
             {/* Prominent Circular Focus Timer */}
@@ -1387,10 +1478,10 @@ export default function App() {
         <div className={`pb-4 mb-6 ${borderDoubleClass} flex flex-wrap items-end justify-between gap-4`}>
           <div>
             <div className="font-mono text-xs uppercase tracking-widest text-opacity-60 opacity-60">
-              ANTI-UITSTEL METHODOLOGIE // WOOP + MICRO-MOMENTUM
+              ANTI-UITSTEL METHODOLOGIE // WOOP + LEERDOELEN + MICRO-MOMENTUM
             </div>
             <h2 className="font-serif text-2xl lg:text-3xl font-black tracking-tight mt-1">
-              Overwin Uitstel via Resultaat & Weerstands-Analyse
+              Overwin Uitstel via Resultaat, Groei &amp; Weerstands-Analyse
             </h2>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
@@ -1422,12 +1513,12 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
           {/* ========================================================================= */}
-          {/* COL 1 (3 COLS): INTAKE WIZARD (SNELLE INVOER & WOOP)                       */}
+          {/* COL 1 (3 COLS): INTAKE WIZARD (SNELLE INVOER & WOOP + LEERDOEL)            */}
           {/* ========================================================================= */}
           <div className="lg:col-span-3 space-y-6">
             <div className={`p-5 rounded border ${cardBgClass}`}>
               
-              {/* Header with Mode Switcher (Phase 1 Quick vs WOOP) */}
+              {/* Header with Mode Switcher (Quick vs WOOP) */}
               <div className="pb-3 border-b border-[#1C1917]/10 dark:border-[#F3EFEA]/10 mb-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -1557,7 +1648,7 @@ export default function App() {
                   </button>
                 </form>
               ) : (
-                /* MODE B: DIEPE WOOP INTAKE */
+                /* MODE B: DIEPE WOOP + LEERDOEL INTAKE */
                 <form onSubmit={handleFormSubmit} className="space-y-4 text-xs font-sans">
                   
                   {/* Taaknaam / Doel */}
@@ -1599,11 +1690,30 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Vraag 2: Wat is de grootste uitdaging of blokkade? */}
+                  {/* Vraag 2: Wat kan ik hiervan leren? (Leerdoel / Motivatie) */}
+                  <div>
+                    <label className="block font-mono font-bold uppercase text-[11px] mb-1 text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                      <GraduationCap className="w-3.5 h-3.5" />
+                      2. Wat kan ik hiervan leren? (Leerdoel)
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder="Welk inzicht, welke vaardigheid of persoonlijke overwinning levert dit op?"
+                      value={formData.learningGoal}
+                      onChange={(e) => setFormData({ ...formData, learningGoal: e.target.value })}
+                      className={`w-full p-2.5 rounded border text-xs font-sans focus:outline-none ${
+                        isDarkMode
+                          ? 'bg-[#12100E] border-[#F3EFEA]/30 focus:border-[#E05626]'
+                          : 'bg-[#FAF8F5] border-[#1C1917]/30 focus:border-[#C2410C]'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Vraag 3: Wat is de grootste uitdaging of blokkade? */}
                   <div>
                     <label className="block font-mono font-bold uppercase text-[11px] mb-1 text-rose-600 dark:text-rose-400 flex items-center gap-1">
                       <ShieldAlert className="w-3.5 h-3.5" />
-                      2. Wat is de grootste blokkade / angst?
+                      3. Wat is de grootste blokkade / angst?
                     </label>
                     <textarea
                       rows={2}
@@ -1637,11 +1747,11 @@ export default function App() {
                     </select>
                   </div>
 
-                  {/* Vraag 3: Eerste micro-stap */}
+                  {/* Vraag 4: Eerste micro-stap */}
                   <div>
                     <label className="block font-mono font-bold uppercase text-[11px] mb-1 text-amber-600 dark:text-amber-400 flex items-center gap-1">
                       <Zap className="w-3.5 h-3.5" />
-                      3. Eerste micro-stap (&lt; 2 min)?
+                      4. Eerste micro-stap (&lt; 2 min)?
                     </label>
                     <input
                       type="text"
@@ -1804,7 +1914,7 @@ export default function App() {
                       onClick={() => handleEnrichQuickTask(activeTask)}
                       className="px-2 py-1 rounded font-mono text-[10px] font-bold uppercase underline hover:opacity-80"
                     >
-                      Vul WOOP aan →
+                      Vul WOOP &amp; Leerdoel aan →
                     </button>
                   </div>
                 )}
@@ -1838,6 +1948,21 @@ export default function App() {
                       "{activeTask.outcome}"
                     </p>
                   </div>
+
+                  {/* Learning Goal Highlight Box */}
+                  {activeTask.learningGoal && (
+                    <div className={`p-3.5 rounded border text-xs space-y-1 ${
+                      isDarkMode ? 'bg-blue-950/20 border-blue-500/30' : 'bg-blue-50/80 border-blue-200'
+                    }`}>
+                      <div className="font-mono font-bold uppercase text-[10px] text-blue-700 dark:text-blue-400 flex items-center gap-1.5">
+                        <GraduationCap className="w-3.5 h-3.5" />
+                        <span>Persoonlijk Leerdoel &amp; Groei-Inzicht:</span>
+                      </div>
+                      <p className="font-serif italic text-sm font-medium leading-relaxed">
+                        "{activeTask.learningGoal}"
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Obstacle & WOOP Contract Box */}
@@ -1938,7 +2063,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Micro-Step Execution Checklist */}
+                {/* Micro-Step Execution Checklist with Edit & Delete */}
                 <div className="space-y-3 pt-2">
                   <div className="flex items-center justify-between font-mono text-xs uppercase border-b border-[#1C1917]/10 dark:border-[#F3EFEA]/10 pb-2">
                     <span className="font-bold flex items-center gap-1">
@@ -1950,24 +2075,91 @@ export default function App() {
                   </div>
 
                   <div className="space-y-2">
-                    {activeTask.microSteps && activeTask.microSteps.map((step) => (
-                      <div
-                        key={step.id}
-                        onClick={() => toggleMicroStep(activeTask.id, step.id)}
-                        className={`p-2.5 rounded border text-xs font-sans flex items-center gap-3 cursor-pointer transition-colors ${
-                          step.completed
-                            ? 'line-through opacity-60 bg-emerald-500/5 border-emerald-500/20'
-                            : (isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/15 hover:border-[#E05626]' : 'bg-[#FAF8F5] border-[#1C1917]/15 hover:border-[#C2410C]')
-                        }`}
-                      >
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
-                          step.completed ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-[#1C1917]/40 dark:border-[#F3EFEA]/40'
-                        }`}>
-                          {step.completed && <Check className="w-3 h-3" />}
+                    {activeTask.microSteps && activeTask.microSteps.map((step) => {
+                      const isStepEditing = editingStepId === step.id;
+
+                      if (isStepEditing) {
+                        return (
+                          <form
+                            key={step.id}
+                            onSubmit={(e) => saveEditMicroStep(activeTask.id, step.id, e)}
+                            className="p-2 rounded border border-amber-500 flex items-center gap-2 bg-amber-500/5"
+                          >
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editingStepText}
+                              onChange={(e) => setEditingStepText(e.target.value)}
+                              className={`flex-1 p-1.5 rounded border text-xs font-sans ${
+                                isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/20' : 'bg-white border-[#1C1917]/20'
+                              }`}
+                            />
+                            <button
+                              type="submit"
+                              className="p-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white"
+                              title="Opslaan"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditMicroStep}
+                              className={`p-1.5 rounded border ${
+                                isDarkMode ? 'border-[#F3EFEA]/20 hover:bg-[#26221F]' : 'border-[#1C1917]/20 hover:bg-stone-100'
+                              }`}
+                              title="Annuleren (Esc)"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </form>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={step.id}
+                          className={`group p-2.5 rounded border text-xs font-sans flex items-center justify-between gap-3 transition-colors ${
+                            step.completed
+                              ? 'line-through opacity-60 bg-emerald-500/5 border-emerald-500/20'
+                              : (isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/15 hover:border-[#E05626]' : 'bg-[#FAF8F5] border-[#1C1917]/15 hover:border-[#C2410C]')
+                          }`}
+                        >
+                          <div
+                            onClick={() => toggleMicroStep(activeTask.id, step.id)}
+                            className="flex items-center gap-3 flex-1 cursor-pointer"
+                          >
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              step.completed ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-[#1C1917]/40 dark:border-[#F3EFEA]/40'
+                            }`}>
+                              {step.completed && <Check className="w-3 h-3" />}
+                            </div>
+                            <span className="flex-1 select-none">{step.text}</span>
+                          </div>
+
+                          {/* Edit & Delete Action Buttons */}
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={(e) => startEditMicroStep(step.id, step.text, e)}
+                              className={`p-1 rounded border ${
+                                isDarkMode ? 'border-[#F3EFEA]/20 hover:bg-[#26221F] text-[#F3EFEA]/80' : 'border-[#1C1917]/20 hover:bg-white text-[#1C1917]/80'
+                              }`}
+                              title="Micro-stap bewerken"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => deleteMicroStep(activeTask.id, step.id, e)}
+                              className="p-1 rounded border border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10"
+                              title="Micro-stap verwijderen"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
                         </div>
-                        <span className="flex-1">{step.text}</span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Add New Micro Step Input */}
@@ -2153,10 +2345,17 @@ export default function App() {
                         </h4>
 
                         {/* Micro Step Preview */}
-                        <p className="text-xs font-sans text-opacity-80 opacity-80 line-clamp-1 mb-2">
+                        <p className="text-xs font-sans text-opacity-80 opacity-80 line-clamp-1 mb-1.5">
                           <span className="font-mono text-[10px] font-bold text-amber-600 dark:text-amber-400">MICRO: </span>
                           {task.microStep}
                         </p>
+
+                        {/* Learning Goal preview if present */}
+                        {task.learningGoal && (
+                          <p className="text-[11px] font-serif italic text-blue-600 dark:text-blue-400 line-clamp-1 mb-2">
+                            🎓 {task.learningGoal}
+                          </p>
+                        )}
 
                         {/* Footer Status Indicators */}
                         <div className="flex items-center justify-between pt-2 border-t border-[#1C1917]/5 dark:border-[#F3EFEA]/5 text-[10px] font-mono">

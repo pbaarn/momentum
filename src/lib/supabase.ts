@@ -16,6 +16,7 @@ export interface Task {
   completedAt: string | null;
   timeSpentSeconds: number;
   isQuickEntry?: boolean;
+  learningGoal?: string;
 }
 
 export interface TaskRow {
@@ -34,6 +35,7 @@ export interface TaskRow {
   completed_at: string | null;
   time_spent_seconds: number | null;
   is_quick_entry: boolean | null;
+  learning_goal?: string | null;
   updated_at?: string | null;
 }
 
@@ -59,6 +61,7 @@ export function taskToRow(task: Task): TaskRow {
     completed_at: task.completedAt,
     time_spent_seconds: task.timeSpentSeconds || 0,
     is_quick_entry: Boolean(task.isQuickEntry),
+    learning_goal: task.learningGoal || '',
     updated_at: new Date().toISOString()
   };
 }
@@ -79,7 +82,8 @@ export function rowToTask(row: TaskRow): Task {
     createdAt: row.created_at || new Date().toISOString(),
     completedAt: row.completed_at || null,
     timeSpentSeconds: row.time_spent_seconds ?? 0,
-    isQuickEntry: Boolean(row.is_quick_entry)
+    isQuickEntry: Boolean(row.is_quick_entry),
+    learningGoal: row.learning_goal || ''
   };
 }
 
