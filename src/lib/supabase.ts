@@ -180,21 +180,21 @@ export async function fetchRemoteTasks(): Promise<Task[] | null> {
   }
 }
 
-export async function upsertRemoteTask(task: Task): Promise<boolean> {
+export async function upsertRemoteTask(task: Task): Promise<{ success: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  if (!client) return { success: false, error: 'Geen Supabase client beschikbaar' };
 
   try {
     const row = taskToRow(task);
     const { error } = await client.from('tasks').upsert(row, { onConflict: 'id' });
     if (error) {
       console.error('Failed to upsert task to Supabase:', error);
-      return false;
+      return { success: false, error: error.message };
     }
-    return true;
-  } catch (err) {
+    return { success: true };
+  } catch (err: any) {
     console.error('Error upserting task:', err);
-    return false;
+    return { success: false, error: err?.message || 'Onbekende netwerkfout' };
   }
 }
 

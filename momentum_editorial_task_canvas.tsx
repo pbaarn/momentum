@@ -408,6 +408,47 @@ export default function App() {
     };
   }, [tasks]);
 
+  // Supabase Initial Sync & Realtime Subscription Lifecycle
+  useEffect(() => {
+    const config = getSupabaseConfig();
+    if (!config) {
+      setIsCloudConnected(false);
+      return;
+    }
+
+    setIsCloudConnected(true);
+
+    // Initial fetch from cloud
+    fetchRemoteTasks().then(remoteTasks => {
+      if (remoteTasks && remoteTasks.length > 0) {
+        setTasks(remoteTasks);
+        if (!activeTaskId) {
+          setActiveTaskId(remoteTasks[0].id);
+        }
+      }
+    });
+
+    // Realtime subscription for live sync across PCs/devices
+    const channel = subscribeToRemoteTasks(
+      (newTask) => {
+        setTasks(prev => {
+          if (prev.some(t => t.id === newTask.id)) return prev;
+          return [newTask, ...prev];
+        });
+      },
+      (updatedTask) => {
+        setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+      },
+      (deletedTaskId) => {
+        setTasks(prev => prev.filter(t => t.id !== deletedTaskId));
+      }
+    );
+
+    return () => {
+      if (channel) channel.unsubscribe();
+    };
+  }, []);
+
   // Request browser notification permission on first interaction
   const requestNotificationPermission = useCallback(() => {
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
@@ -518,9 +559,34 @@ export default function App() {
     };
   }, [isTimerRunning, handleTimerFinished]);
 
-  // Keyboard Shortcuts in Zen Mode (Space, Esc, Enter/C, R)
+  // Force Synchronize Everything to Cloud (Keyboard shortcut or button)
+  const handleForceCloudSync = useCallback(async () => {
+    if (!isCloudConnected) {
+      showNotification('☁️ Supabase is nog niet gekoppeld. Klik op CLOUD SYNC om te koppelen.', 'warning');
+      setShowCloudModal(true);
+      return;
+    }
+    audioEngine.play('start');
+    showNotification('☁️ Bezig met live synchroniseren naar Supabase Cloud...', 'info');
+    const res = await bulkUploadTasks(tasks);
+    if (res.success) {
+      audioEngine.play('complete');
+      showNotification(`⚡ Live gesynchroniseerd! (${res.count} taken opgeslagen in Supabase)`, 'success');
+    } else {
+      showNotification('⚠️ Fout bij synchroniseren naar Supabase Cloud. Controleer instellingen.', 'warning');
+    }
+  }, [isCloudConnected, tasks, showNotification]);
+
+  // Keyboard Shortcuts (Space, Esc, Enter/C, R, and Cmd+S / Ctrl+S for Cloud Sync)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Global Save & Cloud Sync shortcut (Cmd+S or Ctrl+S)
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        handleForceCloudSync();
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
 
@@ -554,7 +620,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isZenMode, isTimerRunning, activeTask, nextIncompleteMicroStep, autoPlay, editingStepId]);
+  }, [isZenMode, isTimerRunning, activeTask, nextIncompleteMicroStep, autoPlay, editingStepId, handleForceCloudSync, showNotification]);
 
   // Fast-Track Quick Brain Dump Submit
   const handleQuickSubmit = (e: React.FormEvent) => {
@@ -739,10 +805,13 @@ export default function App() {
 
   const toggleTaskCompletion = (taskId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    const targetTaskId = taskId || activeTaskId || activeTask?.id;
+    if (!targetTaskId) return;
+
     let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
-        if (t.id === taskId) {
+        if (t.id === targetTaskId) {
           const nextDone = t.status !== 'done';
           if (nextDone) {
             audioEngine.play('complete');
@@ -763,15 +832,22 @@ export default function App() {
     );
 
     if (updatedObj && isCloudConnected) {
-      upsertRemoteTask(updatedObj);
+      upsertRemoteTask(updatedObj).then(res => {
+        if (!res.success && res.error) {
+          showNotification(`⚠️ Cloud sync fout: ${res.error}`, 'warning');
+        }
+      });
     }
   };
 
   const toggleMicroStep = (taskId: string, stepId: string) => {
+    const targetTaskId = taskId || activeTaskId || activeTask?.id;
+    if (!targetTaskId) return;
+
     let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
-        if (t.id === taskId) {
+        if (t.id === targetTaskId) {
           const updatedSteps = (t.microSteps || []).map(s => {
             if (s.id === stepId) {
               const nextState = !s.completed;
@@ -789,17 +865,22 @@ export default function App() {
     );
 
     if (updatedObj && isCloudConnected) {
-      upsertRemoteTask(updatedObj);
+      upsertRemoteTask(updatedObj).then(res => {
+        if (!res.success && res.error) {
+          showNotification(`⚠️ Cloud sync fout: ${res.error}`, 'warning');
+        }
+      });
     }
   };
 
   const handleAddMicroStep = (e?: React.FormEvent, customText: string | null = null) => {
     if (e) e.preventDefault();
     const textToAdd = customText !== null ? customText : newStepText;
-    if (!textToAdd.trim() || !activeTaskId) return;
+    const targetTaskId = activeTaskId || activeTask?.id;
+    if (!textToAdd.trim() || !targetTaskId) return;
 
     const newStepObj = {
-      id: `ms-${Date.now()}`,
+      id: `ms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       text: textToAdd.trim(),
       completed: false
     };
@@ -807,7 +888,7 @@ export default function App() {
     let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
-        if (t.id === activeTaskId) {
+        if (t.id === targetTaskId) {
           const updated = {
             ...t,
             microSteps: [...(t.microSteps || []), newStepObj]
@@ -820,13 +901,17 @@ export default function App() {
     );
 
     if (updatedObj && isCloudConnected) {
-      upsertRemoteTask(updatedObj);
+      upsertRemoteTask(updatedObj).then(res => {
+        if (!res.success && res.error) {
+          showNotification(`⚠️ Cloud sync fout: ${res.error}`, 'warning');
+        }
+      });
     }
 
     setNewStepText('');
     setZenNewStepText('');
     if (autoPlay) audioEngine.play('click');
-    showNotification('Micro-stap toegevoegd aan de taak.', 'info');
+    showNotification('Micro-stap toegevoegd en opgeslagen.', 'info');
   };
 
   // Micro-step editing & deleting handlers
@@ -839,11 +924,13 @@ export default function App() {
   const saveEditMicroStep = (taskId: string, stepId: string, e?: React.FormEvent | React.MouseEvent) => {
     if (e) e.preventDefault();
     if (!editingStepText.trim()) return;
+    const targetTaskId = taskId || activeTaskId || activeTask?.id;
+    if (!targetTaskId) return;
 
     let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
-        if (t.id === taskId) {
+        if (t.id === targetTaskId) {
           const updatedSteps = (t.microSteps || []).map(s =>
             s.id === stepId ? { ...s, text: editingStepText.trim() } : s
           );
@@ -856,7 +943,11 @@ export default function App() {
     );
 
     if (updatedObj && isCloudConnected) {
-      upsertRemoteTask(updatedObj);
+      upsertRemoteTask(updatedObj).then(res => {
+        if (!res.success && res.error) {
+          showNotification(`⚠️ Cloud sync fout: ${res.error}`, 'warning');
+        }
+      });
     }
 
     setEditingStepId(null);
@@ -873,10 +964,13 @@ export default function App() {
 
   const deleteMicroStep = (taskId: string, stepId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    const targetTaskId = taskId || activeTaskId || activeTask?.id;
+    if (!targetTaskId) return;
+
     let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
-        if (t.id === taskId) {
+        if (t.id === targetTaskId) {
           const updatedSteps = (t.microSteps || []).filter(s => s.id !== stepId);
           const updated = { ...t, microSteps: updatedSteps };
           updatedObj = updated;
@@ -887,7 +981,11 @@ export default function App() {
     );
 
     if (updatedObj && isCloudConnected) {
-      upsertRemoteTask(updatedObj);
+      upsertRemoteTask(updatedObj).then(res => {
+        if (!res.success && res.error) {
+          showNotification(`⚠️ Cloud sync fout: ${res.error}`, 'warning');
+        }
+      });
     }
 
     if (autoPlay) audioEngine.play('click');
