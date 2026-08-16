@@ -267,7 +267,8 @@ export default function App() {
   const [timerSeconds, setTimerSeconds] = useState(120);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [burstCompleted, setBurstCompleted] = useState(false);
-  const timerRef = useRef(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const quickTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState(null);
@@ -467,10 +468,14 @@ export default function App() {
     setQuickFormData({
       title: '',
       microStep: '',
-      category: 'Werk'
+      category: quickFormData.category // retain chosen category
     });
+    // Return focus to task title input immediately for continuous keyboard-only entry
+    setTimeout(() => {
+      quickTitleInputRef.current?.focus();
+    }, 0);
     if (autoPlay) audioEngine.play('start');
-    showNotification('⚡ Snelle taak geregistreerd! Klik op de timer om direct te starten.', 'success');
+    showNotification('⚡ Snelle taak geregistreerd! Typ direct door voor de volgende taak.', 'success');
   };
 
   // Full WOOP Form Submit
@@ -1181,7 +1186,10 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-1 p-1 rounded bg-black/5 dark:bg-white/5 font-mono text-[11px]">
                     <button
                       type="button"
-                      onClick={() => setIntakeMode('quick')}
+                      onClick={() => {
+                        setIntakeMode('quick');
+                        setTimeout(() => quickTitleInputRef.current?.focus(), 0);
+                      }}
                       className={`py-1.5 px-2 rounded transition-all flex items-center justify-center gap-1 ${
                         intakeMode === 'quick'
                           ? (isDarkMode ? 'bg-[#26221F] text-[#E05626] font-bold shadow-sm' : 'bg-white text-[#C2410C] font-bold shadow-sm')
@@ -1211,7 +1219,7 @@ export default function App() {
               {!isEditing && intakeMode === 'quick' ? (
                 <form onSubmit={handleQuickSubmit} className="space-y-4 text-xs font-sans">
                   <div className="p-2.5 rounded bg-amber-500/10 border border-amber-500/20 font-serif italic text-xs leading-relaxed text-amber-800 dark:text-amber-300">
-                    "Voel je weerstand? Schrijf enkel de taaknaam en start direct met een minimale stap."
+                    "Voel je weerstand? Schrijf enkel de taaknaam en druk op Enter om direct door te tikken."
                   </div>
 
                   <div>
@@ -1219,6 +1227,7 @@ export default function App() {
                       Wat stel je uit? (Taaknaam)
                     </label>
                     <input
+                      ref={quickTitleInputRef}
                       type="text"
                       required
                       placeholder="bijv. E-mail beantwoorden over offerte"
