@@ -321,16 +321,24 @@ export default function App() {
   const [isZenMode, setIsZenMode] = useState(false);
   const [autoOpenZenOnTimer, setAutoOpenZenOnTimer] = useState(true);
 
-  // Timer states
+  // Timer states & timestamp reference for background tab resilience
   const [timerDuration, setTimerDuration] = useState(120); // default 2 minutes
   const [timerSeconds, setTimerSeconds] = useState(120);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [burstCompleted, setBurstCompleted] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerEndTimestampRef = useRef<number | null>(null);
   const quickTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: string; id: number } | null>(null);
+
+  const showNotification = useCallback((message: string, type: string = 'info') => {
+    setToast({ message, type, id: Date.now() });
+    setTimeout(() => {
+      setToast(null);
+    }, 3500);
+  }, []);
 
   // Filter and Category states
   const [filterMode, setFilterMode] = useState('all'); // 'all', 'frogs', 'quick', 'done'
@@ -371,77 +379,6 @@ export default function App() {
   const [newStepText, setNewStepText] = useState('');
   const [zenNewStepText, setZenNewStepText] = useState('');
 
-  // Persist LocalStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('editorial_momentum_tasks', JSON.stringify(tasks));
-    } catch (e) {
-      console.error('LocalStorage write error:', e);
-    }
-  }, [tasks]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('editorial_momentum_theme', JSON.stringify(isDarkMode));
-    } catch (e) {
-      console.error('LocalStorage write error:', e);
-    }
-  }, [isDarkMode]);
-
-  useEffect(() => {
-    audioEngine.enabled = soundEnabled;
-    audioEngine.volume = soundVolume;
-  }, [soundEnabled, soundVolume]);
-
-  const showNotification = (message: string, type: string = 'info') => {
-    setToast({ message, type, id: Date.now() });
-    setTimeout(() => {
-      setToast(null);
-    }, 3500);
-  };
-
-  // Supabase Initial Sync & Realtime Subscription Lifecycle
-  useEffect(() => {
-    const config = getSupabaseConfig();
-    if (!config) {
-      setIsCloudConnected(false);
-      return;
-    }
-
-    setIsCloudConnected(true);
-
-    // Initial fetch from cloud
-    fetchRemoteTasks().then(remoteTasks => {
-      if (remoteTasks && remoteTasks.length > 0) {
-        setTasks(remoteTasks);
-        if (remoteTasks.length > 0 && !activeTaskId) {
-          setActiveTaskId(remoteTasks[0].id);
-        }
-        showNotification('⚡ Live gesynchroniseerd met Supabase Cloud!', 'success');
-      }
-    });
-
-    // Realtime subscription
-    const channel = subscribeToRemoteTasks(
-      (newTask) => {
-        setTasks(prev => {
-          if (prev.some(t => t.id === newTask.id)) return prev;
-          return [newTask, ...prev];
-        });
-      },
-      (updatedTask) => {
-        setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
-      },
-      (deletedTaskId) => {
-        setTasks(prev => prev.filter(t => t.id !== deletedTaskId));
-      }
-    );
-
-    return () => {
-      if (channel) channel.unsubscribe();
-    };
-  }, []);
-
   const activeTask = useMemo(() => {
     return tasks.find(t => t.id === activeTaskId) || tasks[0] || null;
   }, [tasks, activeTaskId]);
@@ -471,46 +408,115 @@ export default function App() {
     };
   }, [tasks]);
 
-  // Timer Tick & Completion Effect
+  // Request browser notification permission on first interaction
+  const requestNotificationPermission = useCallback(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Sync tab title with active countdown timer
+  useEffect(() => {
+    if (isTimerRunning && activeTask) {
+      document.title = `(${formatTimer(timerSeconds)}) ${activeTask.title.slice(0, 25)}... — MOMENTUM`;
+    } else if (burstCompleted) {
+      document.title = `🎉 (BURST VOLTOOID!) — MOMENTUM`;
+    } else {
+      document.title = `MOMENTUM — Anti-Uitstel Canvas`;
+    }
+  }, [timerSeconds, isTimerRunning, burstCompleted, activeTask]);
+
+  // Handle timer completion logic
+  const handleTimerFinished = useCallback(() => {
+    setIsTimerRunning(false);
+    setBurstCompleted(true);
+    timerEndTimestampRef.current = null;
+    if (timerRef.current) clearInterval(timerRef.current);
+    
+    audioEngine.play('complete');
+    showNotification('🎉 2-Minuten Momentum Burst Voltooid! Je hebt het ijs gebroken.', 'success');
+
+    // Send native system notification if tab is in background
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification('🎉 Momentum 2-Minuten Burst Voltooid!', {
+          body: activeTask ? `Geweldig gedaan met "${activeTask.title}"! Houd het momentum vast.` : 'Het ijs is gebroken!',
+          icon: '/favicon.ico'
+        });
+      } catch (e) {
+        console.error('Notification error:', e);
+      }
+    }
+
+    // Increment spent time on active task and sync
+    if (activeTaskId) {
+      setTasks(prevTasks =>
+        prevTasks.map(t => {
+          if (t.id === activeTaskId) {
+            const updated = { ...t, timeSpentSeconds: (t.timeSpentSeconds || 0) + timerDuration };
+            if (isCloudConnected) upsertRemoteTask(updated);
+            return updated;
+          }
+          return t;
+        })
+      );
+    }
+  }, [activeTaskId, activeTask, timerDuration, isCloudConnected]);
+
+  // Robust Timestamp-Based Timer (survives background tabs, OS switching, sleep)
   useEffect(() => {
     if (isTimerRunning) {
+      // Calculate or restore absolute target end timestamp
+      if (!timerEndTimestampRef.current) {
+        timerEndTimestampRef.current = Date.now() + timerSeconds * 1000;
+      }
+
       timerRef.current = setInterval(() => {
-        setTimerSeconds(prev => {
-          if (prev <= 1) {
-            clearInterval(timerRef.current!);
-            setIsTimerRunning(false);
-            setBurstCompleted(true);
-            audioEngine.play('complete');
-            showNotification('🎉 2-Minuten Momentum Burst Voltooid! Je hebt het ijs gebroken.', 'success');
-            
-            // Increment spent time on active task and sync
-            if (activeTaskId) {
-              setTasks(prevTasks =>
-                prevTasks.map(t => {
-                  if (t.id === activeTaskId) {
-                    const updated = { ...t, timeSpentSeconds: (t.timeSpentSeconds || 0) + timerDuration };
-                    if (isCloudConnected) upsertRemoteTask(updated);
-                    return updated;
-                  }
-                  return t;
-                })
-              );
-            }
-            return 0;
-          }
-          if (soundEnabled && prev % 2 === 0) {
-            audioEngine.play('tick');
-          }
-          return prev - 1;
-        });
-      }, 1000);
+        if (!timerEndTimestampRef.current) return;
+        const now = Date.now();
+        const diffMs = timerEndTimestampRef.current - now;
+        const remaining = Math.max(0, Math.ceil(diffMs / 1000));
+
+        setTimerSeconds(remaining);
+
+        if (remaining <= 0) {
+          handleTimerFinished();
+        } else if (soundEnabled && remaining % 2 === 0) {
+          audioEngine.play('tick');
+        }
+      }, 500); // 500ms check for accurate second ticks
     } else {
+      timerEndTimestampRef.current = null;
       if (timerRef.current) clearInterval(timerRef.current);
     }
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isTimerRunning, activeTaskId, soundEnabled, timerDuration, isCloudConnected]);
+  }, [isTimerRunning, soundEnabled, handleTimerFinished]);
+
+  // Recalculate immediately when tab becomes visible again
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isTimerRunning && timerEndTimestampRef.current) {
+        const now = Date.now();
+        const diffMs = timerEndTimestampRef.current - now;
+        const remaining = Math.max(0, Math.ceil(diffMs / 1000));
+        setTimerSeconds(remaining);
+
+        if (remaining <= 0) {
+          handleTimerFinished();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [isTimerRunning, handleTimerFinished]);
 
   // Keyboard Shortcuts in Zen Mode (Space, Esc, Enter/C, R)
   useEffect(() => {
@@ -890,14 +896,18 @@ export default function App() {
 
   const toggleTimer = (forceOpenZen = false) => {
     if (!isTimerRunning) {
+      requestNotificationPermission();
       audioEngine.play('start');
       setBurstCompleted(false);
+      const startSecs = timerSeconds === 0 ? timerDuration : timerSeconds;
       if (timerSeconds === 0) setTimerSeconds(timerDuration);
+      timerEndTimestampRef.current = Date.now() + startSecs * 1000;
       if (forceOpenZen || autoOpenZenOnTimer) {
         setIsZenMode(true);
       }
       showNotification('🚀 Timer gestart! Blijf gefocust op de micro-stap.', 'info');
     } else {
+      timerEndTimestampRef.current = null;
       audioEngine.play('click');
     }
     setIsTimerRunning(!isTimerRunning);
@@ -905,6 +915,7 @@ export default function App() {
 
   const resetTimer = (newDuration = 120) => {
     setIsTimerRunning(false);
+    timerEndTimestampRef.current = null;
     setTimerDuration(newDuration);
     setTimerSeconds(newDuration);
     setBurstCompleted(false);
@@ -912,8 +923,10 @@ export default function App() {
   };
 
   const extendTimer = (extraSeconds: number) => {
+    const nextSeconds = timerSeconds + extraSeconds;
     setTimerDuration(prev => prev + extraSeconds);
-    setTimerSeconds(prev => prev + extraSeconds);
+    setTimerSeconds(nextSeconds);
+    timerEndTimestampRef.current = Date.now() + nextSeconds * 1000;
     setBurstCompleted(false);
     setIsTimerRunning(true);
     if (autoPlay) audioEngine.play('start');
