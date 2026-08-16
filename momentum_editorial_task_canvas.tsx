@@ -321,7 +321,7 @@ export default function App() {
   const [timerSeconds, setTimerSeconds] = useState(120);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [burstCompleted, setBurstCompleted] = useState(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quickTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   // Toast notification state
@@ -1286,28 +1286,28 @@ export default function App() {
           </div>
 
           {/* Master Controls & Global Utilities */}
-          <div className="flex items-center space-x-3 text-xs font-mono">
+          <div className="flex items-center space-x-2.5 text-xs font-mono">
             
-            {/* Supabase Cloud Sync Status Button */}
+            {/* Supabase Cloud Sync Status Button (Prominent) */}
             <button
               onClick={() => setShowCloudModal(true)}
-              className={`px-2.5 py-1.5 rounded border transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded border transition-all flex items-center gap-1.5 font-bold shadow-sm ${
                 isCloudConnected
-                  ? 'bg-emerald-500/15 border-emerald-500 text-emerald-700 dark:text-emerald-400 font-bold'
-                  : (isDarkMode ? 'border-[#F3EFEA]/20 text-[#F3EFEA]/70 hover:bg-[#26221F]' : 'border-[#1C1917]/20 text-[#1C1917]/70 hover:bg-stone-100')
+                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/30'
+                  : 'bg-amber-500/20 border-amber-500 text-amber-800 dark:text-amber-300 hover:bg-amber-500/30 ring-1 ring-amber-500/30'
               }`}
               title="Cloud synchronisatie tussen verschillende pc's configureren"
             >
               {isCloudConnected ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <Cloud className="w-3.5 h-3.5" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>SYNC: LIVE</span>
                 </>
               ) : (
                 <>
-                  <CloudOff className="w-3.5 h-3.5 opacity-60" />
-                  <span>CLOUD SYNC</span>
+                  <Cloud className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <span>☁️ CLOUD SYNC</span>
                 </>
               )}
             </button>
@@ -1393,7 +1393,21 @@ export default function App() {
               Overwin Uitstel via Resultaat & Weerstands-Analyse
             </h2>
           </div>
-          <div className="flex items-center gap-4 text-xs font-mono">
+          <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+            {/* Clickable Cloud Status Pill in Banner */}
+            <button
+              onClick={() => setShowCloudModal(true)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded border transition-all ${
+                isCloudConnected
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold'
+                  : 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300 font-bold hover:bg-amber-500/20'
+              }`}
+              title="Koppel Supabase Cloud Sync"
+            >
+              <Cloud className="w-3.5 h-3.5" />
+              <span>{isCloudConnected ? 'CLOUD: LIVE' : '☁️ KOPPEL MET SUPABASE'}</span>
+            </button>
+
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
               <span>VOLTOOID: {stats.completed}/{stats.total} ({stats.completionRate}%)</span>
@@ -2426,6 +2440,25 @@ export default function App() {
 
             <div className="space-y-4 text-xs font-sans">
               
+              {/* Supabase Cloud Sync Direct Button */}
+              <div className={`p-4 rounded border ${isDarkMode ? 'bg-[#12100E] border-amber-500/30' : 'bg-[#FAF8F5] border-amber-500/40'}`}>
+                <h4 className="font-mono font-bold uppercase text-xs mb-1 flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                  <Cloud className="w-4 h-4" /> ☁️ Automatische Supabase Cloud Synchronisatie
+                </h4>
+                <p className="text-opacity-80 opacity-80 mb-3">
+                  Synchroniseer al je taken automatisch en real-time tussen verschillende pc's zonder handmatig JSON-bestanden over te zetten.
+                </p>
+                <button
+                  onClick={() => {
+                    setShowBackupModal(false);
+                    setShowCloudModal(true);
+                  }}
+                  className={`w-full py-2 px-3 rounded font-mono font-bold text-xs uppercase ${accentBgClass}`}
+                >
+                  {isCloudConnected ? 'CLOUD INSTELLINGEN BEHEREN' : 'SUPABASE CLOUD KOPPELEN →'}
+                </button>
+              </div>
+
               {/* Export Option */}
               <div className={`p-4 rounded border ${isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/15' : 'bg-[#FAF8F5] border-[#1C1917]/15'}`}>
                 <h4 className="font-mono font-bold uppercase text-xs mb-1 flex items-center gap-1.5">
