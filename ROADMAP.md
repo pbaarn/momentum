@@ -86,19 +86,14 @@ flowchart LR
 ### 📌 Fase 4: Technische Architectuur, PWA & Data
 *Doel: Een robuuste, modulaire en overal beschikbare applicatie.*
 
-- [ ] **Modulaire Projectstructuur (Vite + TypeScript + Tailwind):**
-  - Splitsen van het monolithische canvas (`momentum_editorial_task_canvas.tsx`) in herbruikbare modules:
-    - `src/components/intake/`
-    - `src/components/inspector/`
-    - `src/components/focus/`
-    - `src/components/timeline/`
-    - `src/audio/soundEngine.ts`
-    - `src/types/task.ts`
+- [x] **Data Schema & Supabase Realtime Cloud Sync:**
+  - Hybride offline-first synchronisatie met Supabase Realtime websockets.
+  - In-app verbindingsmodal met live statusindicator en 1-klik lokale taken upload.
+  - Automatische synchronisatie tussen meerdere pc's en browsers.
 - [ ] **PWA (Progressive Web App) & Offline Support:**
   - Installeren als stand-alone desktop en mobiele app met offline werking.
-- [ ] **Data Schema Versiebeheer & Cloud/Local Sync:**
-  - Automatische datamigraties bij schema-updates.
-  - Eenvoudige import/export met optionele versleutelde cloudsynchronisatie.
+- [ ] **Modulaire Projectstructuur (Vite + TypeScript + Tailwind):**
+  - Verdere modularisatie van subcomponenten.
 
 ---
 

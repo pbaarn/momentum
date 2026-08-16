@@ -38,10 +38,26 @@ import {
   FastForward,
   Keyboard,
   ArrowRight,
-  CheckSquare
+  CheckSquare,
+  Cloud,
+  CloudOff,
+  Database,
+  Copy,
+  ExternalLink
 } from 'lucide-react';
+import {
+  Task,
+  getSupabaseConfig,
+  saveSupabaseConfig,
+  testSupabaseConnection,
+  fetchRemoteTasks,
+  upsertRemoteTask,
+  deleteRemoteTask,
+  bulkUploadTasks,
+  subscribeToRemoteTasks
+} from './src/lib/supabase';
 
-const INITIAL_PRESETS = [
+const INITIAL_PRESETS: Task[] = [
   {
     id: 'task-preset-1',
     title: 'Belastingaangifte & Financieel Overzicht 2025',
@@ -107,7 +123,7 @@ const INITIAL_PRESETS = [
   }
 ];
 
-const COACH_NUDGES = {
+const COACH_NUDGES: Record<string, { title: string; quote: string; tip: string; action: string }> = {
   overwhelm: {
     title: 'De Micro-Versnipperaar',
     quote: 'Grote taken bestaan niet; het zijn enkel verzamelingen van 2-minuten acties.',
@@ -134,6 +150,33 @@ const COACH_NUDGES = {
   }
 };
 
+const SUPABASE_SETUP_SQL = `-- 1. Maak de taken tabel aan
+create table if not exists tasks (
+  id text primary key,
+  title text not null,
+  outcome text,
+  obstacle text,
+  obstacle_type text default 'overwhelm',
+  micro_step text,
+  micro_steps jsonb default '[]'::jsonb,
+  dread_level integer default 3,
+  impact_level integer default 4,
+  category text default 'Werk',
+  status text default 'todo',
+  created_at text default (now() at time zone 'utc')::text,
+  completed_at text,
+  time_spent_seconds integer default 0,
+  is_quick_entry boolean default false,
+  updated_at text default (now() at time zone 'utc')::text
+);
+
+-- 2. Schakel Row Level Security (RLS) in met open toegang voor jouw persoonlijke app
+alter table tasks enable row level security;
+create policy "Allow all operations for anon" on tasks for all using (true) with check (true);
+
+-- 3. Activeer Supabase Realtime voor live synchronisatie
+alter publication supabase_realtime add table tasks;`;
+
 class DynamicSoundEngine {
   ctx: AudioContext | null;
   enabled: boolean;
@@ -157,7 +200,7 @@ class DynamicSoundEngine {
     }
   }
 
-  play(type) {
+  play(type: string) {
     if (!this.enabled) return;
     this.init();
     if (!this.ctx) return;
@@ -201,8 +244,8 @@ class DynamicSoundEngine {
     } else if (type === 'complete') {
       const freqs = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
       freqs.forEach((freq, idx) => {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
         const noteStart = now + idx * 0.08;
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, noteStart);
@@ -232,7 +275,7 @@ class DynamicSoundEngine {
 const audioEngine = new DynamicSoundEngine();
 
 export default function App() {
-  const [tasks, setTasks] = useState(() => {
+  const [tasks, setTasks] = useState<Task[]>(() => {
     try {
       const saved = localStorage.getItem('editorial_momentum_tasks');
       return saved ? JSON.parse(saved) : INITIAL_PRESETS;
@@ -241,11 +284,11 @@ export default function App() {
     }
   });
 
-  const [activeTaskId, setActiveTaskId] = useState(() => {
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
     return tasks.length > 0 ? tasks[0].id : null;
   });
 
-  const [isDarkMode, setIsDarkMode] = useState(() => {
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     try {
       const savedTheme = localStorage.getItem('editorial_momentum_theme');
       return savedTheme ? JSON.parse(savedTheme) : false;
@@ -257,6 +300,17 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [autoPlay, setAutoPlay] = useState(true);
   const [soundVolume, setSoundVolume] = useState(0.2);
+
+  // Cloud Sync & Supabase states
+  const [isCloudConnected, setIsCloudConnected] = useState<boolean>(() => {
+    return Boolean(getSupabaseConfig()?.url);
+  });
+  const [showCloudModal, setShowCloudModal] = useState(false);
+  const [cloudUrlInput, setCloudUrlInput] = useState(() => getSupabaseConfig()?.url || '');
+  const [cloudKeyInput, setCloudKeyInput] = useState(() => getSupabaseConfig()?.anonKey || '');
+  const [cloudTesting, setCloudTesting] = useState(false);
+  const [cloudMessage, setCloudMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [copiedSql, setCopiedSql] = useState(false);
 
   // Focus & Zen Mode states (Phase 1)
   const [isZenMode, setIsZenMode] = useState(false);
@@ -271,14 +325,14 @@ export default function App() {
   const quickTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   // Toast notification state
-  const [toast, setToast] = useState(null);
+  const [toast, setToast] = useState<{ message: string; type: string; id: number } | null>(null);
 
   // Filter and Category states
   const [filterMode, setFilterMode] = useState('all'); // 'all', 'frogs', 'quick', 'done'
   const [categoryFilter, setCategoryFilter] = useState('all');
 
   // Intake Mode: 'quick' (10s fast track) or 'woop' (deep 3-question analysis)
-  const [intakeMode, setIntakeMode] = useState('quick');
+  const [intakeMode, setIntakeMode] = useState<'quick' | 'woop'>('quick');
 
   // Quick Invoer Form State
   const [quickFormData, setQuickFormData] = useState({
@@ -289,7 +343,7 @@ export default function App() {
 
   // WOOP Form states for creating/editing tasks
   const [isEditing, setIsEditing] = useState(false);
-  const [editTargetId, setEditTargetId] = useState(null);
+  const [editTargetId, setEditTargetId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     title: '',
     outcome: '',
@@ -307,6 +361,7 @@ export default function App() {
   const [newStepText, setNewStepText] = useState('');
   const [zenNewStepText, setZenNewStepText] = useState('');
 
+  // Persist LocalStorage
   useEffect(() => {
     try {
       localStorage.setItem('editorial_momentum_tasks', JSON.stringify(tasks));
@@ -328,12 +383,54 @@ export default function App() {
     audioEngine.volume = soundVolume;
   }, [soundEnabled, soundVolume]);
 
-  const showNotification = (message, type = 'info') => {
+  const showNotification = (message: string, type: string = 'info') => {
     setToast({ message, type, id: Date.now() });
     setTimeout(() => {
       setToast(null);
     }, 3500);
   };
+
+  // Supabase Initial Sync & Realtime Subscription Lifecycle
+  useEffect(() => {
+    const config = getSupabaseConfig();
+    if (!config) {
+      setIsCloudConnected(false);
+      return;
+    }
+
+    setIsCloudConnected(true);
+
+    // Initial fetch from cloud
+    fetchRemoteTasks().then(remoteTasks => {
+      if (remoteTasks && remoteTasks.length > 0) {
+        setTasks(remoteTasks);
+        if (remoteTasks.length > 0 && !activeTaskId) {
+          setActiveTaskId(remoteTasks[0].id);
+        }
+        showNotification('⚡ Live gesynchroniseerd met Supabase Cloud!', 'success');
+      }
+    });
+
+    // Realtime subscription
+    const channel = subscribeToRemoteTasks(
+      (newTask) => {
+        setTasks(prev => {
+          if (prev.some(t => t.id === newTask.id)) return prev;
+          return [newTask, ...prev];
+        });
+      },
+      (updatedTask) => {
+        setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+      },
+      (deletedTaskId) => {
+        setTasks(prev => prev.filter(t => t.id !== deletedTaskId));
+      }
+    );
+
+    return () => {
+      if (channel) channel.unsubscribe();
+    };
+  }, []);
 
   const activeTask = useMemo(() => {
     return tasks.find(t => t.id === activeTaskId) || tasks[0] || null;
@@ -370,20 +467,23 @@ export default function App() {
       timerRef.current = setInterval(() => {
         setTimerSeconds(prev => {
           if (prev <= 1) {
-            clearInterval(timerRef.current);
+            clearInterval(timerRef.current!);
             setIsTimerRunning(false);
             setBurstCompleted(true);
             audioEngine.play('complete');
             showNotification('🎉 2-Minuten Momentum Burst Voltooid! Je hebt het ijs gebroken.', 'success');
             
-            // Increment spent time on active task
+            // Increment spent time on active task and sync
             if (activeTaskId) {
               setTasks(prevTasks =>
-                prevTasks.map(t =>
-                  t.id === activeTaskId
-                    ? { ...t, timeSpentSeconds: (t.timeSpentSeconds || 0) + timerDuration }
-                    : t
-                )
+                prevTasks.map(t => {
+                  if (t.id === activeTaskId) {
+                    const updated = { ...t, timeSpentSeconds: (t.timeSpentSeconds || 0) + timerDuration };
+                    if (isCloudConnected) upsertRemoteTask(updated);
+                    return updated;
+                  }
+                  return t;
+                })
               );
             }
             return 0;
@@ -395,16 +495,17 @@ export default function App() {
         });
       }, 1000);
     } else {
-      clearInterval(timerRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
     }
-    return () => clearInterval(timerRef.current);
-  }, [isTimerRunning, activeTaskId, soundEnabled, timerDuration]);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isTimerRunning, activeTaskId, soundEnabled, timerDuration, isCloudConnected]);
 
   // Keyboard Shortcuts in Zen Mode (Space, Esc, Enter/C, R)
   useEffect(() => {
-    const handleKeyDown = (e) => {
-      // Don't intercept if user is typing in an input or textarea
-      const target = e.target;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
       const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
 
       if (e.key === 'Escape') {
@@ -435,7 +536,7 @@ export default function App() {
   }, [isZenMode, isTimerRunning, activeTask, nextIncompleteMicroStep, autoPlay]);
 
   // Fast-Track Quick Brain Dump Submit
-  const handleQuickSubmit = (e) => {
+  const handleQuickSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickFormData.title.trim()) {
       showNotification('Voer minimaal een taaknaam in voor de snelle invoer.', 'warning');
@@ -443,7 +544,7 @@ export default function App() {
     }
 
     const firstStep = quickFormData.microStep.trim() || '1e minuut: open het bestand of document en bekijk de startlijn';
-    const newTask = {
+    const newTask: Task = {
       id: `task-${Date.now()}`,
       title: quickFormData.title.trim(),
       outcome: 'Direct overzicht, rust in het hoofd en taak afgerond.',
@@ -465,21 +566,24 @@ export default function App() {
 
     setTasks(prev => [newTask, ...prev]);
     setActiveTaskId(newTask.id);
+    if (isCloudConnected) upsertRemoteTask(newTask);
+
     setQuickFormData({
       title: '',
       microStep: '',
-      category: quickFormData.category // retain chosen category
+      category: quickFormData.category
     });
-    // Return focus to task title input immediately for continuous keyboard-only entry
+
     setTimeout(() => {
       quickTitleInputRef.current?.focus();
     }, 0);
+
     if (autoPlay) audioEngine.play('start');
     showNotification('⚡ Snelle taak geregistreerd! Typ direct door voor de volgende taak.', 'success');
   };
 
   // Full WOOP Form Submit
-  const handleFormSubmit = (e) => {
+  const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title.trim() || !formData.outcome.trim() || !formData.microStep.trim()) {
       showNotification('Vul a.u.b. de 3 kernvragen in voor optimale momentum-begeleiding.', 'warning');
@@ -494,7 +598,7 @@ export default function App() {
   };
 
   const createNewTask = () => {
-    const newTask = {
+    const newTask: Task = {
       id: `task-${Date.now()}`,
       title: formData.title,
       outcome: formData.outcome,
@@ -516,6 +620,8 @@ export default function App() {
 
     setTasks(prev => [newTask, ...prev]);
     setActiveTaskId(newTask.id);
+    if (isCloudConnected) upsertRemoteTask(newTask);
+
     resetForm();
     setShowSaveModal(false);
     if (autoPlay) audioEngine.play('start');
@@ -523,10 +629,11 @@ export default function App() {
   };
 
   const updateExistingTask = () => {
+    let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
         if (t.id === editTargetId) {
-          return {
+          const updated: Task = {
             ...t,
             title: formData.title,
             outcome: formData.outcome,
@@ -536,12 +643,19 @@ export default function App() {
             dreadLevel: Number(formData.dreadLevel),
             impactLevel: Number(formData.impactLevel),
             category: formData.category,
-            isQuickEntry: false // now fully enriched
+            isQuickEntry: false
           };
+          updatedObj = updated;
+          return updated;
         }
         return t;
       })
     );
+
+    if (updatedObj && isCloudConnected) {
+      upsertRemoteTask(updatedObj);
+    }
+
     resetForm();
     setShowSaveModal(false);
     if (autoPlay) audioEngine.play('click');
@@ -563,10 +677,10 @@ export default function App() {
     setEditTargetId(null);
   };
 
-  const handleEditClick = (task) => {
+  const handleEditClick = (task: Task) => {
     setIsEditing(true);
     setEditTargetId(task.id);
-    setIntakeMode('woop'); // switch to WOOP mode for editing
+    setIntakeMode('woop');
     setFormData({
       title: task.title,
       outcome: task.outcome,
@@ -580,24 +694,26 @@ export default function App() {
     if (autoPlay) audioEngine.play('click');
   };
 
-  const handleEnrichQuickTask = (task) => {
+  const handleEnrichQuickTask = (task: Task) => {
     handleEditClick(task);
     showNotification('Vul de WOOP-vragen in om de taakpsychologie te verdiepen.', 'info');
   };
 
-  const handleDeleteTask = (taskId, e) => {
+  const handleDeleteTask = (taskId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setTasks(prev => prev.filter(t => t.id !== taskId));
     if (activeTaskId === taskId) {
       const remaining = tasks.filter(t => t.id !== taskId);
       setActiveTaskId(remaining.length > 0 ? remaining[0].id : null);
     }
+    if (isCloudConnected) deleteRemoteTask(taskId);
     if (autoPlay) audioEngine.play('click');
     showNotification('Taak verwijderd uit je lijst.', 'info');
   };
 
   const toggleTaskCompletion = (taskId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
         if (t.id === taskId) {
@@ -608,18 +724,25 @@ export default function App() {
           } else {
             audioEngine.play('click');
           }
-          return {
+          const updated: Task = {
             ...t,
             status: nextDone ? 'done' : 'todo',
             completedAt: nextDone ? new Date().toISOString() : null
           };
+          updatedObj = updated;
+          return updated;
         }
         return t;
       })
     );
+
+    if (updatedObj && isCloudConnected) {
+      upsertRemoteTask(updatedObj);
+    }
   };
 
-  const toggleMicroStep = (taskId, stepId) => {
+  const toggleMicroStep = (taskId: string, stepId: string) => {
+    let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
         if (t.id === taskId) {
@@ -631,14 +754,20 @@ export default function App() {
             }
             return s;
           });
-          return { ...t, microSteps: updatedSteps };
+          const updated = { ...t, microSteps: updatedSteps };
+          updatedObj = updated;
+          return updated;
         }
         return t;
       })
     );
+
+    if (updatedObj && isCloudConnected) {
+      upsertRemoteTask(updatedObj);
+    }
   };
 
-  const handleAddMicroStep = (e, customText = null) => {
+  const handleAddMicroStep = (e?: React.FormEvent, customText: string | null = null) => {
     if (e) e.preventDefault();
     const textToAdd = customText !== null ? customText : newStepText;
     if (!textToAdd.trim() || !activeTaskId) return;
@@ -649,17 +778,24 @@ export default function App() {
       completed: false
     };
 
+    let updatedObj: Task | null = null;
     setTasks(prev =>
       prev.map(t => {
         if (t.id === activeTaskId) {
-          return {
+          const updated = {
             ...t,
             microSteps: [...(t.microSteps || []), newStepObj]
           };
+          updatedObj = updated;
+          return updated;
         }
         return t;
       })
     );
+
+    if (updatedObj && isCloudConnected) {
+      upsertRemoteTask(updatedObj);
+    }
 
     setNewStepText('');
     setZenNewStepText('');
@@ -690,7 +826,7 @@ export default function App() {
     audioEngine.play('click');
   };
 
-  const extendTimer = (extraSeconds) => {
+  const extendTimer = (extraSeconds: number) => {
     setTimerDuration(prev => prev + extraSeconds);
     setTimerSeconds(prev => prev + extraSeconds);
     setBurstCompleted(false);
@@ -699,10 +835,102 @@ export default function App() {
     showNotification(`⚡ +${Math.round(extraSeconds / 60)} min Flow verlengd! Blijf in de zone.`, 'success');
   };
 
+  // Cloud Configuration Handlers
+  const handleTestCloudConnection = async () => {
+    if (!cloudUrlInput.trim() || !cloudKeyInput.trim()) {
+      setCloudMessage({ type: 'error', text: 'Vul a.u.b. zowel de Supabase URL als de Anon Key in.' });
+      return;
+    }
+    setCloudTesting(true);
+    setCloudMessage(null);
+    const res = await testSupabaseConnection({ url: cloudUrlInput, anonKey: cloudKeyInput });
+    setCloudTesting(false);
+    if (res.success) {
+      setCloudMessage({ type: 'success', text: `✅ ${res.message}` });
+    } else {
+      setCloudMessage({ type: 'error', text: `❌ ${res.message}` });
+    }
+  };
+
+  const handleSaveCloudConnection = async () => {
+    if (!cloudUrlInput.trim() || !cloudKeyInput.trim()) {
+      setCloudMessage({ type: 'error', text: 'Vul a.u.b. zowel de Supabase URL als de Anon Key in.' });
+      return;
+    }
+
+    setCloudTesting(true);
+    const res = await testSupabaseConnection({ url: cloudUrlInput, anonKey: cloudKeyInput });
+    setCloudTesting(false);
+
+    if (res.success) {
+      saveSupabaseConfig({ url: cloudUrlInput.trim(), anonKey: cloudKeyInput.trim() });
+      setIsCloudConnected(true);
+      showNotification('🚀 Supabase Cloud verbinding opgeslagen & geactiveerd!', 'success');
+      setShowCloudModal(false);
+      
+      // Auto fetch
+      fetchRemoteTasks().then(remoteTasks => {
+        if (remoteTasks && remoteTasks.length > 0) {
+          setTasks(remoteTasks);
+        }
+      });
+    } else {
+      setCloudMessage({ type: 'error', text: `Kan niet verbinden: ${res.message}` });
+    }
+  };
+
+  const handleDisconnectCloud = () => {
+    saveSupabaseConfig(null);
+    setIsCloudConnected(false);
+    setCloudUrlInput('');
+    setCloudKeyInput('');
+    setCloudMessage(null);
+    setShowCloudModal(false);
+    showNotification('Cloud verbinding verbroken. App werkt nu lokaal.', 'info');
+  };
+
+  const handleBulkUploadToCloud = async () => {
+    if (!isCloudConnected) {
+      showNotification('Verbind eerst met Supabase voordat je kunt uploaden.', 'warning');
+      return;
+    }
+    setCloudTesting(true);
+    const res = await bulkUploadTasks(tasks);
+    setCloudTesting(false);
+    if (res.success) {
+      setCloudMessage({ type: 'success', text: `✅ ${res.count} taken succesvol geüpload naar Supabase Cloud!` });
+      showNotification(`📦 ${res.count} taken geüpload naar de cloud.`, 'success');
+    } else {
+      setCloudMessage({ type: 'error', text: 'Fout bij het uploaden van taken.' });
+    }
+  };
+
+  const handleFetchFromCloud = async () => {
+    if (!isCloudConnected) return;
+    setCloudTesting(true);
+    const remoteTasks = await fetchRemoteTasks();
+    setCloudTesting(false);
+    if (remoteTasks) {
+      setTasks(remoteTasks);
+      if (remoteTasks.length > 0) setActiveTaskId(remoteTasks[0].id);
+      showNotification(`⚡ ${remoteTasks.length} taken opgehaald uit de cloud!`, 'success');
+      setShowCloudModal(false);
+    } else {
+      setCloudMessage({ type: 'error', text: 'Kon geen taken ophalen uit Supabase.' });
+    }
+  };
+
+  const copySqlToClipboard = () => {
+    navigator.clipboard.writeText(SUPABASE_SETUP_SQL);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2500);
+    showNotification('📋 SQL script gekopieerd naar klembord!', 'info');
+  };
+
   const handleExportJSON = () => {
     const backupData = {
       app: 'Editorial Momentum Task Canvas',
-      version: '1.1.0',
+      version: '1.2.0',
       exportedAt: new Date().toISOString(),
       tasks: tasks,
       settings: {
@@ -741,9 +969,10 @@ export default function App() {
               if (parsed.settings) {
                 if (typeof parsed.settings.isDarkMode === 'boolean') setIsDarkMode(parsed.settings.isDarkMode);
               }
+              if (isCloudConnected) bulkUploadTasks(parsed.tasks);
               setShowBackupModal(false);
               if (autoPlay) audioEngine.play('complete');
-              showNotification('✅ Backup succesvol ingeladen en toegepast!', 'success');
+              showNotification('✅ Backup succesvol ingeladen en gesynchroniseerd!', 'success');
             } else {
               showNotification('Ongeldig bestand: Geen geldige takenstructuur gevonden.', 'warning');
             }
@@ -766,7 +995,7 @@ export default function App() {
     });
   }, [tasks, filterMode, categoryFilter]);
 
-  const formatTimer = (secs) => {
+  const formatTimer = (secs: number) => {
     const m = Math.floor(secs / 60);
     const s = secs % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
@@ -911,7 +1140,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Flow State Extensions (if completed or during sprint) */}
+              {/* Flow State Extensions */}
               {(burstCompleted || timerSeconds === 0) && (
                 <div className="mt-4 p-4 rounded border bg-emerald-500/10 border-emerald-500/30 max-w-md mx-auto space-y-2 animate-fadeIn">
                   <div className="font-mono font-bold text-xs text-emerald-700 dark:text-emerald-400 flex items-center justify-center gap-1.5">
@@ -1059,13 +1288,37 @@ export default function App() {
           {/* Master Controls & Global Utilities */}
           <div className="flex items-center space-x-3 text-xs font-mono">
             
+            {/* Supabase Cloud Sync Status Button */}
+            <button
+              onClick={() => setShowCloudModal(true)}
+              className={`px-2.5 py-1.5 rounded border transition-colors flex items-center gap-1.5 ${
+                isCloudConnected
+                  ? 'bg-emerald-500/15 border-emerald-500 text-emerald-700 dark:text-emerald-400 font-bold'
+                  : (isDarkMode ? 'border-[#F3EFEA]/20 text-[#F3EFEA]/70 hover:bg-[#26221F]' : 'border-[#1C1917]/20 text-[#1C1917]/70 hover:bg-stone-100')
+              }`}
+              title="Cloud synchronisatie tussen verschillende pc's configureren"
+            >
+              {isCloudConnected ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>SYNC: LIVE</span>
+                </>
+              ) : (
+                <>
+                  <CloudOff className="w-3.5 h-3.5 opacity-60" />
+                  <span>CLOUD SYNC</span>
+                </>
+              )}
+            </button>
+
             {/* Auto-open Zen on Timer toggle */}
             <button
               onClick={() => {
                 setAutoOpenZenOnTimer(!autoOpenZenOnTimer);
                 showNotification(!autoOpenZenOnTimer ? 'Zen Modus opent nu automatisch bij start timer' : 'Automatische Zen Modus uitgeschakeld', 'info');
               }}
-              className={`px-2.5 py-1.5 rounded border transition-colors hidden sm:flex items-center gap-1.5 ${
+              className={`px-2.5 py-1.5 rounded border transition-colors hidden md:flex items-center gap-1.5 ${
                 autoOpenZenOnTimer
                   ? (isDarkMode ? 'bg-[#E05626]/20 border-[#E05626] text-[#E05626]' : 'bg-[#C2410C]/10 border-[#C2410C] text-[#C2410C]')
                   : (isDarkMode ? 'border-[#F3EFEA]/20 text-[#F3EFEA]/60' : 'border-[#1C1917]/20 text-[#1C1917]/60')
@@ -1082,7 +1335,7 @@ export default function App() {
                 setAutoPlay(!autoPlay);
                 showNotification(autoPlay ? 'Auto-play gedempt' : 'Auto-play geactiveerd', 'info');
               }}
-              className={`px-2.5 py-1.5 rounded border transition-colors flex items-center gap-1.5 ${
+              className={`px-2.5 py-1.5 rounded border transition-colors hidden sm:flex items-center gap-1.5 ${
                 autoPlay 
                   ? (isDarkMode ? 'bg-[#E05626]/20 border-[#E05626] text-[#E05626]' : 'bg-[#C2410C]/10 border-[#C2410C] text-[#C2410C]')
                   : (isDarkMode ? 'border-[#F3EFEA]/20 text-[#F3EFEA]/60' : 'border-[#1C1917]/20 text-[#1C1917]/60')
@@ -1946,6 +2199,173 @@ export default function App() {
         </div>
 
       </main>
+
+      {/* ========================================================================= */}
+      {/* SUPABASE CLOUD SYNC CONFIGURATION MODAL                                   */}
+      {/* ========================================================================= */}
+      {showCloudModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 rounded border shadow-2xl ${cardBgClass} space-y-5`}>
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-[#1C1917]/10 dark:border-[#F3EFEA]/10 pb-3">
+              <div className="flex items-center gap-2">
+                <Cloud className="w-5 h-5 text-emerald-500" />
+                <h3 className="font-serif font-bold text-lg">Supabase Realtime Cloud Synchronisatie</h3>
+              </div>
+              <button onClick={() => setShowCloudModal(false)}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Status overview */}
+            <div className={`p-3.5 rounded border flex items-center justify-between text-xs font-mono ${
+              isCloudConnected ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10'
+            }`}>
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${isCloudConnected ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'}`}></span>
+                <span>STATUS: {isCloudConnected ? 'VERBONDEN MET SUPABASE (REAL-TIME LIVE)' : 'NIET VERBONDEN (LOKALE OPSLAG)'}</span>
+              </div>
+              {isCloudConnected && (
+                <button
+                  onClick={handleDisconnectCloud}
+                  className="text-rose-600 dark:text-rose-400 underline hover:opacity-80 text-[11px]"
+                >
+                  Ontkoppelen
+                </button>
+              )}
+            </div>
+
+            {/* Credentials Form */}
+            <div className="space-y-3 text-xs font-sans">
+              <h4 className="font-mono font-bold uppercase text-[11px] flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                <Database className="w-4 h-4" /> 1. Vul je Supabase projectgegevens in
+              </h4>
+              <p className="text-opacity-80 opacity-80 text-[11px] leading-relaxed">
+                Maak een gratis project aan op <a href="https://supabase.com" target="_blank" rel="noreferrer" className="underline font-bold text-[#E05626] dark:text-[#E05626]">supabase.com</a> en kopieer de Project URL en Public Anon Key uit <em>Settings &gt; API</em>.
+              </p>
+
+              <div>
+                <label className="block font-mono font-bold uppercase text-[10px] mb-1">
+                  Supabase Project URL:
+                </label>
+                <input
+                  type="text"
+                  placeholder="https://xyzabcdefg.supabase.co"
+                  value={cloudUrlInput}
+                  onChange={(e) => setCloudUrlInput(e.target.value)}
+                  className={`w-full p-2.5 rounded border text-xs font-mono focus:outline-none ${
+                    isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/20 focus:border-[#E05626]' : 'bg-[#FAF8F5] border-[#1C1917]/20 focus:border-[#C2410C]'
+                  }`}
+                />
+              </div>
+
+              <div>
+                <label className="block font-mono font-bold uppercase text-[10px] mb-1">
+                  Supabase Public Anon Key:
+                </label>
+                <input
+                  type="password"
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  value={cloudKeyInput}
+                  onChange={(e) => setCloudKeyInput(e.target.value)}
+                  className={`w-full p-2.5 rounded border text-xs font-mono focus:outline-none ${
+                    isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/20 focus:border-[#E05626]' : 'bg-[#FAF8F5] border-[#1C1917]/20 focus:border-[#C2410C]'
+                  }`}
+                />
+              </div>
+
+              {cloudMessage && (
+                <div className={`p-3 rounded border font-mono text-xs ${
+                  cloudMessage.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
+                }`}>
+                  {cloudMessage.text}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2 pt-1 font-mono text-xs">
+                <button
+                  type="button"
+                  disabled={cloudTesting}
+                  onClick={handleTestCloudConnection}
+                  className={`py-2 px-3 rounded border font-bold ${
+                    isDarkMode ? 'border-[#F3EFEA]/20 hover:bg-[#26221F]' : 'border-[#1C1917]/20 hover:bg-stone-100'
+                  }`}
+                >
+                  {cloudTesting ? 'Testen...' : 'Test Verbinding'}
+                </button>
+                <button
+                  type="button"
+                  disabled={cloudTesting}
+                  onClick={handleSaveCloudConnection}
+                  className={`py-2 px-4 rounded font-bold ${accentBgClass}`}
+                >
+                  {isCloudConnected ? 'Instellingen Bijwerken' : 'Opslaan & Verbinden'}
+                </button>
+                {isCloudConnected && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={cloudTesting}
+                      onClick={handleBulkUploadToCloud}
+                      className="py-2 px-3 rounded border border-emerald-500/40 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-500/10"
+                      title="Upload alle huidige taken in deze browser naar Supabase"
+                    >
+                      Upload Lokale Taken → Cloud
+                    </button>
+                    <button
+                      type="button"
+                      disabled={cloudTesting}
+                      onClick={handleFetchFromCloud}
+                      className="py-2 px-3 rounded border border-blue-500/40 text-blue-700 dark:text-blue-400 font-bold hover:bg-blue-500/10"
+                      title="Haal taken op van Supabase"
+                    >
+                      Haal Cloud Taken Op
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* SQL Table Creation Guide */}
+            <div className="space-y-2 text-xs font-sans pt-3 border-t border-[#1C1917]/10 dark:border-[#F3EFEA]/10">
+              <div className="flex items-center justify-between">
+                <h4 className="font-mono font-bold uppercase text-[11px] flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                  <Database className="w-4 h-4" /> 2. SQL Setup Script (1x uitvoeren in Supabase)
+                </h4>
+                <button
+                  onClick={copySqlToClipboard}
+                  className="font-mono text-[10px] uppercase underline flex items-center gap-1 hover:opacity-80"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>{copiedSql ? 'Gekopieerd! ✓' : 'Kopieer SQL'}</span>
+                </button>
+              </div>
+
+              <p className="text-opacity-80 opacity-80 text-[11px]">
+                Plak dit script in de <strong>SQL Editor</strong> van je Supabase dashboard en klik op <em>Run</em>:
+              </p>
+
+              <pre className={`p-3 rounded border text-[10px] font-mono overflow-x-auto max-h-36 ${
+                isDarkMode ? 'bg-[#12100E] border-[#F3EFEA]/15 text-stone-300' : 'bg-stone-50 border-[#1C1917]/15 text-stone-700'
+              }`}>
+                {SUPABASE_SETUP_SQL}
+              </pre>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowCloudModal(false)}
+                className={`px-4 py-2 rounded font-mono text-xs border ${
+                  isDarkMode ? 'border-[#F3EFEA]/30' : 'border-[#1C1917]/30'
+                }`}
+              >
+                Sluiten
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* DUAL-OPTION SAVE MODAL                                                    */}
